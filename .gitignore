@@ -1,0 +1,7 @@
+.pio
+.vscode
+logs
+venv
+*/.env
+*/response
+.DS_Store
