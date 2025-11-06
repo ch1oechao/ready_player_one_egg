@@ -102,7 +102,7 @@ def voice():
         tts_req = {
             "input": {"text": text},
             "voice": {"languageCode": "en-US", "name": "en-US-Neural2-F"},
-            "audioConfig": {"audioEncoding": "MP3"}
+            "audioConfig": {"audioEncoding": "LINEAR16", "sampleRateHertz": 16000}
         }
 
         tts = requests.post(
@@ -116,9 +116,31 @@ def voice():
         if tts.status_code != 200:
             return jsonify({"error": "TTS call failed", "details": tts.text}), tts.status_code
 
-        fname = f"reply_{uuid.uuid4().hex}.mp3"
+        # Get the raw PCM data from TTS
+        pcm_audio_data = base64.b64decode(tts.json()["audioContent"])
+        
+        # Convert PCM to WAV format
+        wav_buffer = io.BytesIO()
+        num_channels = 1
+        sample_rate = 16000
+        bits_per_sample = 16
+        byte_rate = sample_rate * num_channels * bits_per_sample // 8
+        block_align = num_channels * bits_per_sample // 8
+        subchunk2_size = len(pcm_audio_data)
+        chunk_size = 36 + subchunk2_size
+
+        wav_buffer.write(b'RIFF')
+        wav_buffer.write(struct.pack('<I', chunk_size))
+        wav_buffer.write(b'WAVEfmt ')
+        wav_buffer.write(struct.pack('<IHHIIHH',
+            16, 1, num_channels, sample_rate, byte_rate, block_align, bits_per_sample))
+        wav_buffer.write(b'data')
+        wav_buffer.write(struct.pack('<I', subchunk2_size))
+        wav_buffer.write(pcm_audio_data)
+        
+        fname = f"reply_{uuid.uuid4().hex}.wav"
         with open(f"response/{fname}", "wb") as f:
-            f.write(base64.b64decode(tts.json()["audioContent"]))
+            f.write(wav_buffer.getvalue())
 
         log(f"Saved reply as {fname}")
         return f"http://{request.host}/response/{fname}"
@@ -144,7 +166,14 @@ def test():
 @app.route("/<path:fname>")
 def serve_file(fname):
     try:
-        return send_file(fname, mimetype="audio/mpeg")
+        # Determine MIME type based on file extension
+        if fname.endswith('.wav'):
+            mimetype = "audio/wav"
+        elif fname.endswith('.mp3'):
+            mimetype = "audio/mpeg"
+        else:
+            mimetype = "audio/wav"  # Default to WAV
+        return send_file(fname, mimetype=mimetype)
     except Exception as e:
         log(f"Serve file error: {e}")
         return jsonify({"error": str(e)}), 404
